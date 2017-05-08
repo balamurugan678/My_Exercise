@@ -1,6 +1,10 @@
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import Column
 from datetime import datetime
-from dateutil.parser import parse
+from pyspark.sql import functions as F
+from pyspark.sql.functions import *
+#from dateutil.parser import parse
+import subprocess
 
 warehouse_location = '/user/hive/warehouse'
 
@@ -11,67 +15,102 @@ spark = SparkSession \
     .enableHiveSupport() \
     .getOrCreate()
 
+
+
+#Function to change the . to *
+def changeColumnValue(dataFrameWithDot, columnName, oldValueToMatch, newValueToReplace):
+    return dataFrameWithDot.withColumn(columnName, regexp_replace(columnName, oldValueToMatch, newValueToReplace))
+
+### Dataframe in Spark as dataFrameWithDot
+dataFrameWithDot = spark.sql("SELECT * from dunnhumbydata")
+dataFrameWithDot.show()
+
+### Calling the changeColumnValue function
+newDf = changeColumnValue(dataFrameWithDot, 'name', "\\.", "*")
+newDf.show()
+
+newDf.coalesce(1) \
+      .write \
+      .mode("overwrite") \
+      .saveAsTable("dunnhumbydata11")
+
+#changeColumnValue(dataFrameWithDot, "name", ".", "*")
+
 #Table one creation
-#moviedf = spark.sql("SELECT userid, movieid, rating from user_data SORT BY rating DESC LIMIT 10")
-#df1st = moviedf.alias('df1st')
-#moviedf.show()
+moviedf = spark.sql("SELECT userid, movieid, rating from user_data SORT BY rating DESC LIMIT 10")
+df1st = moviedf.alias('df1st')
+moviedf.show()
 
 
 #Table two creation
-#unixtimedf = spark.sql("SELECT userid, rating, unixtime from user_data SORT BY rating DESC LIMIT 10")
-#df2nd = unixtimedf.alias('df2nd')
-#unixtimedf.show()
+unixtimedf = spark.sql("SELECT userid, rating, unixtime from user_data SORT BY rating DESC LIMIT 10")
+df2nd = unixtimedf.alias('df2nd')
+# unixtimedf.show()
+#
+# #Join two tables and remove duplicate rows
+df = moviedf.join(unixtimedf,["userid"]).dropDuplicates()
+# df.show()
+#
+# #Remove duplicate columns by specfying the columns needed
+df33 = df1st.join(df2nd,["userid"]).select("df1st.userid","df1st.movieid","df1st.rating","df2nd.unixtime")
+# df33.show()
+#
+# #Save in hive - Mode could be overwrite rather than append
+df33.coalesce(1) \
+     .write \
+     .mode("overwrite") \
+     .format('parquet') \
+     .saveAsTable("sample_table")
 
-#Join two tables and remove duplicate rows
-#df = moviedf.join(unixtimedf,["userid"]).dropDuplicates()
-#df.show()
+# dy = spark.table("sample_table")
+# dy.coalesce(1).write.mode("overwrite").format('parquet').insertInto("merged_user_data")
+#
+# latestDate = spark.sql("select max(datey)-1 from dunnhumbydata")
+# latestDate.show()
+# latestYear = spark.sql("select max(year) from dunnhumbydata")
+# latestYear.show()
+#
+#
+# df.withColumn("name",
+#     F.when(Column("name").contains("."), Column("name").replace(".","*")).
+#     otherwise(df["name"]))
+#
+def changeColumnValue(dataFrameWithDot, columnName, oldValueToMatch, newValueToReplace):
+     dataFrameWithDot.withColumn(columnName,
+                   F.when(Column(columnName).contains(oldValueToMatch), Column(columnName).replace(oldValueToMatch, newValueToReplace)).
+                   otherwise(df[columnName]))
 
-#Remove duplicate columns by specfying the columns needed
-#df33 = df1st.join(df2nd,["userid"]).select("df1st.userid","df1st.movieid","df1st.rating","df2nd.unixtime")
-#df33.show()
 
-#Save in hive - Mode could be overwrite rather than append
-#df33.coalesce(1) \
-#    .write \
-#    .mode("append") \
-#    .format('parquet') \
-#    .saveAsTable("merged_user_data")
+# ### Dataframe in Spark as dataFrameWithDot
+# ### Calling the changeColumnValue function
+# changeColumnValue(dataFrameWithDot, "COLUMN_NAME", ".", "*")
 
-latestDate = spark.sql("select max(datey)-1 from dunnhumbydata")
-latestDate.show()
-latestYear = spark.sql("select max(year) from dunnhumbydata")
-latestYear.show()
+partitionRDDList = spark.sql("select distinct concat(year, '-12-', lpad(datey,2,0)) as partitionValue from dunnhumbydata")
+ #latestTimestamp.foreach(myLatestTime)
+# #Truncate partition
+partitionTimeStampList = list()
 
-def myLatestTime(person):
-    print(person.get(0))
+partitionList = partitionRDDList.rdd.map(lambda p: p.partitionValue).collect()
 
-latestTimestamp = spark.sql("select distinct concat(year, '-12-', datey) as name from dunnhumbydata")
-#latestTimestamp.foreach(myLatestTime)
-#Truncate partition
+for partition in partitionList:
+     partitionTimeStampList.append(datetime.strptime(partition, '%Y-%m-%d'))
+     spark.sql("ALTER TABLE aggregateddata DROP PARTITION (datey< 19 , year< 2017)")
+     print(partition)
+     print(len(partitionTimeStampList))
 
-dateLists = list()
+print(max(partitionTimeStampList))
+partitionTimeStampList.remove(max(partitionTimeStampList))
+ #print(max(partitionTimeStampList))
 
-teenNames = latestTimestamp.rdd.map(lambda p: p.name).collect()
-
-for name in teenNames:
-    dateLists.append(datetime.strptime(name, '%Y-%m-%d'))
-    #spark.sql("ALTER TABLE aggregateddata DROP PARTITION (datey< 19 , year< 2017)")
-    print(name)
-    print(len(dateLists))
-
-print(max(dateLists))
-dateLists.remove(max(dateLists))
-print(max(dateLists))
-
-for datename in dateLists:
-    dateStrong = datename.date().strftime('%Y-%-m-%-d')
-    print(dateStrong)
-    datDtromg  = dateStrong.split('-')[0] + "====" +dateStrong.split('-')[1] + "======"+ dateStrong.split('-')[2]
-    dateYeary = dateStrong.split('-')[0]
-    dateDatey = dateStrong.split('-')[2]
-    spark.sql("ALTER TABLE dunnhumbydata DROP PARTITION (datey = "+ dateDatey +" , year= "+ dateYeary+")")
-    print("You are done!!!!")
-#spark.sql("ALTER TABLE aggregateddata DROP PARTITION (datey< 19 , year< 2017)")
+for partitionTimeStamp in partitionTimeStampList:
+     partitionTimeString = partitionTimeStamp.date().strftime('%Y-%-m-%-d')
+     print(partitionTimeString)
+     datDtromg  = partitionTimeString.split('-')[0] + "====" + partitionTimeString.split('-')[1] + "======" + partitionTimeString.split('-')[2]
+     partitionYear = partitionTimeString.split('-')[0]
+     partitionDate = partitionTimeString.split('-')[2]
+     spark.sql("ALTER TABLE dunnhumbydata DROP PARTITION (datey = " + partitionDate + " , year= " + partitionYear + ")")
+     print("You are done!!!!")
+spark.sql("ALTER TABLE aggregateddata DROP PARTITION (datey< 19 , year< 2017)")
 
 
 # Pre - 2.0
@@ -81,10 +120,10 @@ for datename in dateLists:
 #     .option("header", "true") \
 #     .save("myfile.csv")
 
-# df.coalesce(1) \
-#   .write \
-#   .mode("overwrite") \
-#   .option("header", "true") \
-#   .csv("/Users/bgurus/balamurugan/Dunnhumby/top10movies.csv")
+df.coalesce(1) \
+   .write \
+   .mode("overwrite") \
+   .option("header", "true") \
+   .csv("/Users/bgurus/balamurugan/Dunnhumby/top10movies.csv")
 
 print "*********DONE************"
